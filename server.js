@@ -33,11 +33,10 @@ app.use(helmet());
 app.use(cookieParser());
 app.use(express.json());
 app.use(cors({
-  origin: [
-    'https://binary-murex.vercel.app',
-    'http://localhost:5173'
-  ],
-  credentials: true // Для работы с куки
+  origin: ['https://binary-murex.vercel.app', 'http://localhost:5173'],
+  credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'], // Явно разрешаем OPTIONS
+  allowedHeaders: ['Content-Type', 'X-CSRF-Token', 'Authorization']
 }));
 
 // HTTPS редирект
@@ -51,7 +50,7 @@ app.use((req, res, next) => {
 // Rate limiting
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 100, // Увеличено до 100
   message: 'Слишком много запросов, попробуйте снова через 15 минут'
 });
 
@@ -71,6 +70,12 @@ app.get('/api/csrf-token', (req, res) => {
 
 // Роуты
 app.use('/api/auth', authLimiter, authRoutes);
+
+// Обработка ошибок
+app.use((err, req, res, next) => {
+  logger.error(`Server error: ${err.message}`);
+  res.status(500).json({ message: 'Ошибка сервера' });
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => logger.info(`Server running on port ${PORT}`));
