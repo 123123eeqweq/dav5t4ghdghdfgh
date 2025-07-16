@@ -4,9 +4,9 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
 const { csrfProtection } = require('./middleware/csrf');
-const { authLimiter } = require('./middleware/rateLimit');
 const { errorHandler } = require('./middleware/errorHandler');
 const authRoutes = require('./routes/auth');
+const passwordRoutes = require('./routes/password');
 const logger = require('./utils/logger');
 require('dotenv').config();
 
@@ -49,7 +49,8 @@ app.get('/api/csrf-token', csrfProtection, (req, res) => {
 });
 
 // Routes
-app.use('/api/auth', authLimiter, csrfProtection, authRoutes);
+app.use('/api/auth', csrfProtection, authRoutes);
+app.use('/api/auth', csrfProtection, passwordRoutes);
 
 // Error handling
 app.use(errorHandler);

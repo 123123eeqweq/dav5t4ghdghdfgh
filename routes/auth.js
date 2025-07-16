@@ -7,6 +7,7 @@ const { redisClient } = require('../utils/redis');
 const User = require('../models/User');
 const logger = require('../utils/logger');
 const { authenticateToken } = require('../middleware/auth');
+const { authLimiter } = require('../middleware/rateLimit');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -70,7 +71,7 @@ const sendVerificationCode = async (email, code) => {
 };
 
 // Routes
-router.post('/register', async (req, res) => {
+router.post('/register', authLimiter, async (req, res) => {
   const { error } = registerSchema.validate(req.body);
   if (error) return res.status(400).json({ message: error.details[0].message });
 
@@ -95,7 +96,7 @@ router.post('/register', async (req, res) => {
   }
 });
 
-router.post('/verify', async (req, res) => {
+router.post('/verify', authLimiter, async (req, res) => {
   const { error } = verifySchema.validate(req.body);
   if (error) return res.status(400).json({ message: error.details[0].message });
 
@@ -135,7 +136,7 @@ router.post('/verify', async (req, res) => {
   }
 });
 
-router.post('/login', async (req, res) => {
+router.post('/login', authLimiter, async (req, res) => {
   const { error } = loginSchema.validate(req.body);
   if (error) return res.status(400).json({ message: error.details[0].message });
 
