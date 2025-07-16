@@ -1,34 +1,18 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const rateLimit = require('express-rate-limit');
-const helmet = require('helmet');
-const csurf = require('csurf');
 const cookieParser = require('cookie-parser');
-const winston = require('winston');
+const helmet = require('helmet');
+const { csrfProtection } = require('./middleware/csrf');
+const { authLimiter } = require('./middleware/rateLimit');
+const { errorHandler } = require('./middleware/errorHandler');
 const authRoutes = require('./routes/auth');
+const logger = require('./utils/logger');
 require('dotenv').config();
 
-// Логирование
-const logger = winston.createLogger({
-  level: 'info',
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json()
-  ),
-  transports: [
-    new winston.transports.File({ filename: 'error.log', level: 'error' }),
-    new winston.transports.File({ filename: 'combined.log' })
-  ]
-});
-
-if (process.env.NODE_ENV !== 'production') {
-  logger.add(new winston.transports.Console({
-    format: winston.format.simple()
-  }));
-}
-
 const app = express();
+
+// Middleware
 app.use(helmet());
 app.use(cookieParser());
 app.use(express.json());
@@ -39,7 +23,7 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'X-CSRF-Token', 'Authorization']
 }));
 
-// HTTPS редирект
+// HTTPS redirect
 app.use((req, res, next) => {
   if (req.get('X-Forwarded-Proto') !== 'https' && process.env.NODE_ENV === 'production') {
     return res.redirect(`https://${req.get('host')}${req.url}`);
@@ -47,30 +31,13 @@ app.use((req, res, next) => {
   next();
 });
 
-// Rate limiting
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: 'Слишком много запросов, попробуйте снова через 15 минут'
-});
-
-// Подключение к MongoDB
+// MongoDB connection
 mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => logger.info('Connected to MongoDB'))
   .catch(err => logger.error('MongoDB connection error:', err));
 
-// CSRF защита
-const csrfProtection = csurf({
-  cookie: {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax' // Добавляем SameSite
-  }
-});
-app.use(csrfProtection);
-
-// Отправка CSRF-токена клиенту
-app.get('/api/csrf-token', (req, res) => {
+// CSRF token endpoint
+app.get('/api/csrf-token', csrfProtection, (req, res) => {
   try {
     const csrfToken = req.csrfToken();
     logger.info(`CSRF token generated for ${req.ip}`);
@@ -81,18 +48,11 @@ app.get('/api/csrf-token', (req, res) => {
   }
 });
 
-// Роуты
-app.use('/api/auth', authLimiter, authRoutes);
+// Routes
+app.use('/api/auth', authLimiter, csrfProtection, authRoutes);
 
-// Обработка ошибок CSRF
-app.use((err, req, res, next) => {
-  if (err.code === 'EBADCSRFTOKEN') {
-    logger.error(`Invalid CSRF token: ${req.path}, Token: ${req.get('X-CSRF-Token')}, Cookies: ${JSON.stringify(req.cookies)}`);
-    return res.status(403).json({ message: 'Неверный CSRF-токен' });
-  }
-  logger.error(`Server error: ${err.message}`);
-  res.status(500).json({ message: 'Ошибка сервера' });
-});
+// Error handling
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => logger.info(`Server running on port ${PORT}`));

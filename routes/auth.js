@@ -2,33 +2,15 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const Joi = require('joi');
-const redis = require('redis');
+const { redisClient } = require('../utils/redis');
 const User = require('../models/User');
-const winston = require('winston');
+const logger = require('../utils/logger');
+const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
-const redisClient = redis.createClient({
-  url: process.env.REDIS_URL,
-  socket: { tls: true }
-});
 
-redisClient.connect().catch(err => console.error('Redis connection error:', err));
-
-// Логирование
-const logger = winston.createLogger({
-  level: 'info',
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json()
-  ),
-  transports: [
-    new winston.transports.File({ filename: 'error.log', level: 'error' }),
-    new winston.transports.File({ filename: 'combined.log' })
-  ]
-});
-
-// Схемы валидации
+// Validation schemas
 const registerSchema = Joi.object({
   email: Joi.string().email().required(),
   password: Joi.string().min(8).pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/).required(),
@@ -40,7 +22,7 @@ const loginSchema = Joi.object({
   password: Joi.string().required()
 });
 
-// Защита от брутфорса
+// Brute force protection
 const checkLoginAttempts = async (email) => {
   const key = `login_attempts:${email}`;
   const attempts = await redisClient.get(key);
@@ -53,19 +35,7 @@ const checkLoginAttempts = async (email) => {
   }
 };
 
-// Middleware для проверки JWT
-const authenticateToken = (req, res, next) => {
-  const token = req.cookies.token;
-  if (!token) return res.status(401).json({ message: 'Токен отсутствует' });
-
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) return res.status(403).json({ message: 'Недействительный токен' });
-    req.user = user;
-    next();
-  });
-};
-
-// Регистрация
+// Routes
 router.post('/register', async (req, res) => {
   const { error } = registerSchema.validate(req.body);
   if (error) return res.status(400).json({ message: error.details[0].message });
@@ -90,7 +60,6 @@ router.post('/register', async (req, res) => {
   }
 });
 
-// Логин
 router.post('/login', async (req, res) => {
   const { error } = loginSchema.validate(req.body);
   if (error) return res.status(400).json({ message: error.details[0].message });
@@ -116,14 +85,12 @@ router.post('/login', async (req, res) => {
     await redisClient.del(`login_attempts:${email}`);
     logger.info(`User logged in: ${email}`);
     res.json({ message: 'Вход успешен' });
-  }
-catch (error) {
+  } catch (error) {
     logger.error(`Login error for ${email}: ${error.message}`);
     res.status(400).json({ message: error.message });
   }
 });
 
-// Защищенный роут
 router.get('/profile', authenticateToken, async (req, res) => {
   try {
     const user = await User.findOne({ email: req.user.email });
@@ -134,7 +101,6 @@ router.get('/profile', authenticateToken, async (req, res) => {
   }
 });
 
-// Выход
 router.post('/logout', (req, res) => {
   res.clearCookie('token');
   logger.info('User logged out');
