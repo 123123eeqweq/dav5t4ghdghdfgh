@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const Joi = require('joi');
 const sgMail = require('@sendgrid/mail');
+const { OAuth2Client } = require('google-auth-library');
 const { redisClient } = require('../utils/redis');
 const User = require('../models/User');
 const logger = require('../utils/logger');
@@ -12,9 +13,13 @@ const { authLimiter } = require('../middleware/rateLimit');
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 const REFRESH_SECRET = process.env.REFRESH_SECRET || 'your-refresh-secret-key';
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 
 // Настройка SendGrid
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+
+// Настройка Google OAuth
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 // Validation schemas
 const registerSchema = Joi.object({
@@ -31,6 +36,10 @@ const loginSchema = Joi.object({
 const verifySchema = Joi.object({
   email: Joi.string().email().required(),
   code: Joi.string().length(6).pattern(/^\d+$/).required()
+});
+
+const googleLoginSchema = Joi.object({
+  token: Joi.string().required()
 });
 
 // Brute force protection
@@ -68,6 +77,13 @@ const sendVerificationCode = async (email, code) => {
     logger.error(`Error sending email to ${email}: ${error.message}, response: ${error.response?.body}`);
     throw new Error('Ошибка отправки кода');
   }
+};
+
+// Generate tokens
+const generateTokens = (email) => {
+  const accessToken = jwt.sign({ email }, JWT_SECRET, { expiresIn: '1h' });
+  const refreshToken = jwt.sign({ email }, REFRESH_SECRET, { expiresIn: '7d' });
+  return { accessToken, refreshToken };
 };
 
 // Routes
@@ -176,6 +192,56 @@ router.post('/login', authLimiter, async (req, res) => {
   }
 });
 
+router.post('/google', authLimiter, async (req, res) => {
+  const { error } = googleLoginSchema.validate(req.body);
+  if (error) return res.status(400).json({ message: error.details[0].message });
+
+  const { token } = req.body;
+  try {
+    const ticket = await googleClient.verifyIdToken({
+      idToken: token,
+      audience: GOOGLE_CLIENT_ID
+    });
+    const payload = ticket.getPayload();
+    const email = payload.email;
+    let user = await User.findOne({ email });
+
+    if (!user) {
+      user = new User({
+        email,
+        isVerified: true, // Google verifies email
+        referralCode: generateCode() // Optional: generate a referral code
+      });
+      await user.save();
+      logger.info(`User registered via Google: ${email}`);
+    } else if (!user.isVerified) {
+      user.isVerified = true;
+      await user.save();
+      logger.info(`User verified via Google: ${email}`);
+    }
+
+    const { accessToken, refreshToken } = generateTokens(email);
+    res.cookie('token', accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
+      maxAge: 3600000
+    });
+    res.cookie('refreshToken', refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
+      maxAge: 7 * 24 * 3600000
+    });
+
+    logger.info(`User logged in via Google: ${email}`);
+    res.json({ message: 'Вход через Google успешен' });
+  } catch (error) {
+    logger.error(`Google login error: ${error.message}`);
+    res.status(400).json({ message: 'Ошибка входа через Google' });
+  }
+});
+
 router.get('/profile', authenticateToken, async (req, res) => {
   try {
     const user = await User.findOne({ email: req.user.email });
@@ -232,12 +298,5 @@ router.post('/logout', (req, res) => {
   logger.info('User logged out');
   res.json({ message: 'Выход успешен' });
 });
-
-// Generate tokens
-const generateTokens = (email) => {
-  const accessToken = jwt.sign({ email }, JWT_SECRET, { expiresIn: '1h' });
-  const refreshToken = jwt.sign({ email }, REFRESH_SECRET, { expiresIn: '7d' });
-  return { accessToken, refreshToken };
-};
 
 module.exports = router;
