@@ -116,7 +116,7 @@ router.post('/login', async (req, res) => {
     await redisClient.del(`login_attempts:${email}`);
     logger.info(`User logged in: ${email}`);
     res.json({ message: 'Вход успешен' });
-  } Auth.js continued
+  }
 catch (error) {
     logger.error(`Login error for ${email}: ${error.message}`);
     res.status(400).json({ message: error.message });
