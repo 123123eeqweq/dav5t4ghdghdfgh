@@ -10,7 +10,7 @@ const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 const redisClient = redis.createClient({
   url: process.env.REDIS_URL,
-  socket: { tls: true } // Включаем TLS для Upstash
+  socket: { tls: true }
 });
 
 redisClient.connect().catch(err => console.error('Redis connection error:', err));
@@ -45,7 +45,7 @@ const checkLoginAttempts = async (email) => {
   const key = `login_attempts:${email}`;
   const attempts = await redisClient.get(key);
   const maxAttempts = 5;
-  const lockoutTime = 15 * 60; // 15 минут в секундах
+  const lockoutTime = 15 * 60;
 
   if (attempts && parseInt(attempts) >= maxAttempts) {
     const ttl = await redisClient.ttl(key);
@@ -76,7 +76,12 @@ router.post('/register', async (req, res) => {
     const user = new User({ email, password: hashedPassword, referralCode });
     await user.save();
     const token = jwt.sign({ email: user.email }, JWT_SECRET, { expiresIn: '1h' });
-    res.cookie('token', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', maxAge: 3600000 });
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
+      maxAge: 3600000
+    });
     logger.info(`User registered: ${email}`);
     res.status(201).json({ message: 'Регистрация успешна' });
   } catch (error) {
@@ -102,11 +107,17 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ message: `Неверный email или пароль. Попыток осталось: ${5 - attempts}` });
     }
     const token = jwt.sign({ email: user.email }, JWT_SECRET, { expiresIn: '1h' });
-    res.cookie('token', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', maxAge: 3600000 });
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
+      maxAge: 3600000
+    });
     await redisClient.del(`login_attempts:${email}`);
     logger.info(`User logged in: ${email}`);
     res.json({ message: 'Вход успешен' });
-  } catch (error) {
+  } Auth.js continued
+catch (error) {
     logger.error(`Login error for ${email}: ${error.message}`);
     res.status(400).json({ message: error.message });
   }

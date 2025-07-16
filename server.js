@@ -60,18 +60,26 @@ mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopol
   .catch(err => logger.error('MongoDB connection error:', err));
 
 // CSRF защита
-const csrfProtection = csurf({ cookie: { httpOnly: true, secure: process.env.NODE_ENV === 'production' } });
+const csrfProtection = csurf({
+  cookie: {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax' // Добавляем SameSite
+  }
+});
 app.use(csrfProtection);
 
 // Отправка CSRF-токена клиенту
-// app.get('/api/csrf-token', (req, res) => {
-//   try {
-//     res.json({ csrfToken: req.csrfToken() });
-//   } catch (err) {
-//     logger.error(`CSRF token error: ${err.message}`);
-//     res.status(500).json({ message: 'Ошибка генерации CSRF-токена' });
-//   }
-// });
+app.get('/api/csrf-token', (req, res) => {
+  try {
+    const csrfToken = req.csrfToken();
+    logger.info(`CSRF token generated for ${req.ip}`);
+    res.json({ csrfToken });
+  } catch (err) {
+    logger.error(`CSRF token error: ${err.message}`);
+    res.status(500).json({ message: 'Ошибка генерации CSRF-токена' });
+  }
+});
 
 // Роуты
 app.use('/api/auth', authLimiter, authRoutes);
@@ -79,7 +87,7 @@ app.use('/api/auth', authLimiter, authRoutes);
 // Обработка ошибок CSRF
 app.use((err, req, res, next) => {
   if (err.code === 'EBADCSRFTOKEN') {
-    logger.error(`Invalid CSRF token: ${req.path}`);
+    logger.error(`Invalid CSRF token: ${req.path}, Token: ${req.get('X-CSRF-Token')}, Cookies: ${JSON.stringify(req.cookies)}`);
     return res.status(403).json({ message: 'Неверный CSRF-токен' });
   }
   logger.error(`Server error: ${err.message}`);
