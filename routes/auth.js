@@ -102,7 +102,12 @@ router.get('/profile', authenticateToken, async (req, res) => {
 });
 
 router.post('/logout', (req, res) => {
-  res.clearCookie('token');
+  res.clearCookie('token', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
+    path: '/' // Ensure cookie is cleared for all paths
+  });
   logger.info('User logged out');
   res.json({ message: 'Выход успешен' });
 });
