@@ -64,14 +64,14 @@ const csrfProtection = csurf({ cookie: { httpOnly: true, secure: process.env.NOD
 app.use(csrfProtection);
 
 // Отправка CSRF-токена клиенту
-app.get('/api/csrf-token', (req, res) => {
-  try {
-    res.json({ csrfToken: req.csrfToken() });
-  } catch (err) {
-    logger.error(`CSRF token error: ${err.message}`);
-    res.status(500).json({ message: 'Ошибка генерации CSRF-токена' });
-  }
-});
+// app.get('/api/csrf-token', (req, res) => {
+//   try {
+//     res.json({ csrfToken: req.csrfToken() });
+//   } catch (err) {
+//     logger.error(`CSRF token error: ${err.message}`);
+//     res.status(500).json({ message: 'Ошибка генерации CSRF-токена' });
+//   }
+// });
 
 // Роуты
 app.use('/api/auth', authLimiter, authRoutes);
