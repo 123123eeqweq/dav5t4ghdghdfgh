@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const Joi = require('joi');
+const sgMail = require('@sendgrid/mail');
 const { redisClient } = require('../utils/redis');
 const User = require('../models/User');
 const logger = require('../utils/logger');
@@ -9,7 +10,10 @@ const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
-const REFRESH_SECRET = process.env.REFRESH_SECRET || 'your-refresh-secret-key'; // Новый секрет для refresh-токенов
+const REFRESH_SECRET = process.env.REFRESH_SECRET || 'your-refresh-secret-key';
+
+// Настройка SendGrid
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 // Validation schemas
 const registerSchema = Joi.object({
@@ -21,6 +25,11 @@ const registerSchema = Joi.object({
 const loginSchema = Joi.object({
   email: Joi.string().email().required(),
   password: Joi.string().required()
+});
+
+const verifySchema = Joi.object({
+  email: Joi.string().email().required(),
+  code: Joi.string().length(6).pattern(/^\d+$/).required()
 });
 
 // Brute force protection
@@ -36,11 +45,25 @@ const checkLoginAttempts = async (email) => {
   }
 };
 
-// Generate tokens
-const generateTokens = (email) => {
-  const accessToken = jwt.sign({ email }, JWT_SECRET, { expiresIn: '1h' });
-  const refreshToken = jwt.sign({ email }, REFRESH_SECRET, { expiresIn: '7d' });
-  return { accessToken, refreshToken };
+// Generate random 6-digit code
+const generateCode = () => {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+// Send verification code
+const sendVerificationCode = async (email, code) => {
+  try {
+    await sgMail.send({
+      to: email,
+      from: process.env.SENDER_EMAIL,
+      subject: 'Код подтверждения для Binary Broker',
+      text: `Ваш код подтверждения: ${code}`
+    });
+    logger.info(`Verification code sent to ${email}`);
+  } catch (error) {
+    logger.error(`Error sending email to ${email}: ${error.message}`);
+    throw new Error('Ошибка отправки кода');
+  }
 };
 
 // Routes
@@ -50,27 +73,62 @@ router.post('/register', async (req, res) => {
 
   const { email, password, referralCode } = req.body;
   try {
+    const existingUser = await User.findOne({ email });
+    if (existingUser) return res.status(400).json({ message: 'Email уже занят' });
+
     const hashedPassword = await bcrypt.hash(password, 12);
-    const user = new User({ email, password: hashedPassword, referralCode });
+    const user = new User({ email, password: hashedPassword, referralCode, isVerified: false });
     await user.save();
+
+    const code = generateCode();
+    await redisClient.set(`verify_code:${email}`, code, { EX: 10 * 60 }); // 10 минут
+    await sendVerificationCode(email, code);
+
+    logger.info(`User registered, awaiting verification: ${email}`);
+    res.status(201).json({ message: 'Код подтверждения отправлен на email' });
+  } catch (error) {
+    logger.error(`Registration error for ${email}: ${error.message}`);
+    res.status(400).json({ message: error.message });
+  }
+});
+
+router.post('/verify', async (req, res) => {
+  const { error } = verifySchema.validate(req.body);
+  if (error) return res.status(400).json({ message: error.details[0].message });
+
+  const { email, code } = req.body;
+  try {
+    const storedCode = await redisClient.get(`verify_code:${email}`);
+    if (!storedCode || storedCode !== code) {
+      return res.status(400).json({ message: 'Неверный код подтверждения' });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: 'Пользователь не найден' });
+
+    user.isVerified = true;
+    await user.save();
+
     const { accessToken, refreshToken } = generateTokens(email);
     res.cookie('token', accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
-      maxAge: 3600000 // 1 hour
+      maxAge: 3600000
     });
     res.cookie('refreshToken', refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
-      maxAge: 7 * 24 * 3600000 // 7 days
+      maxAge: 7 * 24 * 3600000
     });
-    logger.info(`User registered: ${email}`);
-    res.status(201).json({ message: 'Регистрация успешна' });
+
+    await redisClient.del(`verify_code:${email}`);
+    logger.info(`User verified: ${email}`);
+    res.json({ message: 'Верификация успешна' });
   } catch (error) {
-    logger.error(`Registration error for ${email}: ${error.message}`);
-    res.status(400).json({ message: 'Email уже занят' });
+    logger.error(`Verification error for ${email}: ${error.message}`);
+    res.status(400).json({ message: error.message });
   }
 });
 
@@ -88,6 +146,9 @@ router.post('/login', async (req, res) => {
       if (attempts === 1) await redisClient.expire(key, 15 * 60);
       logger.warn(`Failed login attempt for ${email}: ${attempts}/${5}`);
       return res.status(400).json({ message: `Неверный email или пароль. Попыток осталось: ${5 - attempts}` });
+    }
+    if (!user.isVerified) {
+      return res.status(403).json({ message: 'Email не подтверждён' });
     }
     const { accessToken, refreshToken } = generateTokens(email);
     res.cookie('token', accessToken, {
@@ -167,5 +228,12 @@ router.post('/logout', (req, res) => {
   logger.info('User logged out');
   res.json({ message: 'Выход успешен' });
 });
+
+// Generate tokens
+const generateTokens = (email) => {
+  const accessToken = jwt.sign({ email }, JWT_SECRET, { expiresIn: '1h' });
+  const refreshToken = jwt.sign({ email }, REFRESH_SECRET, { expiresIn: '7d' });
+  return { accessToken, refreshToken };
+};
 
 module.exports = router;
