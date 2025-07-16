@@ -53,15 +53,18 @@ const generateCode = () => {
 // Send verification code
 const sendVerificationCode = async (email, code) => {
   try {
-    await sgMail.send({
+    const msg = {
       to: email,
       from: process.env.SENDER_EMAIL,
       subject: 'Код подтверждения для Binary Broker',
-      text: `Ваш код подтверждения: ${code}`
-    });
-    logger.info(`Verification code sent to ${email}`);
+      text: `Ваш код подтверждения: ${code}`,
+      html: `<p>Ваш код подтверждения: <strong>${code}</strong></p>`
+    };
+    const response = await sgMail.send(msg);
+    logger.info(`Verification code sent to ${email}, status: ${response[0].statusCode}`);
+    return response;
   } catch (error) {
-    logger.error(`Error sending email to ${email}: ${error.message}`);
+    logger.error(`Error sending email to ${email}: ${error.message}, response: ${error.response?.body}`);
     throw new Error('Ошибка отправки кода');
   }
 };
