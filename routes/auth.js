@@ -35,7 +35,7 @@ const loginSchema = Joi.object({
 
 const verifySchema = Joi.object({
   email: Joi.string().email().required(),
-  code: Joi.string().length(6).pattern(/^\d+$/).required()
+  payload: Joi.string().length(6).pattern(/^\d+$/).required()
 });
 
 const googleLoginSchema = Joi.object({
@@ -198,20 +198,27 @@ router.post('/google', authLimiter, async (req, res) => {
 
   const { token } = req.body;
   try {
+    logger.info(`Attempting Google login with token: ${token.slice(0, 10)}...`);
+    if (!GOOGLE_CLIENT_ID) {
+      logger.error('GOOGLE_CLIENT_ID is not defined in environment variables');
+      return res.status(500).json({ message: 'Ошибка конфигурации сервера' });
+    }
     const ticket = await googleClient.verifyIdToken({
       idToken: token,
       audience: GOOGLE_CLIENT_ID
     });
     const payload = ticket.getPayload();
+    logger.info(`Google login payload: ${JSON.stringify(payload)}`);
     const email = payload.email;
     let user = await User.findOne({ email });
 
     if (!user) {
       user = new User({
         email,
-        isVerified: true, // Google verifies email
-        referralCode: generateCode() // Optional: generate a referral code
+        isVerified: true,
+        referralCode: generateCode()
       });
+      logger.info(`Attempting to save new user: ${email}`);
       await user.save();
       logger.info(`User registered via Google: ${email}`);
     } else if (!user.isVerified) {
@@ -237,8 +244,8 @@ router.post('/google', authLimiter, async (req, res) => {
     logger.info(`User logged in via Google: ${email}`);
     res.json({ message: 'Вход через Google успешен' });
   } catch (error) {
-    logger.error(`Google login error: ${error.message}`);
-    res.status(400).json({ message: 'Ошибка входа через Google' });
+    logger.error(`Google login error: ${error.message}, stack: ${error.stack}`);
+    res.status(400).json({ message: 'Ошибка входа через Google', details: error.message });
   }
 });
 
